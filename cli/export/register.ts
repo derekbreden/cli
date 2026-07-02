@@ -2,6 +2,7 @@ import type { Command } from "commander"
 import { exportSnippet } from "lib/shared/export-snippet"
 import type { ExportFormat } from "lib/shared/export-snippet"
 import { ALLOWED_EXPORT_FORMATS } from "lib/shared/export-snippet"
+import { OUTPUT_EXTENSIONS } from "lib/shared/export-snippet"
 import { generateCircuitJson } from "lib/shared/generate-circuit-json"
 import { getSpiceWithPaddedSim } from "lib/shared/get-spice-with-sim"
 import { runSimulation } from "lib/eecircuit-engine/run-simulation"
@@ -81,21 +82,68 @@ export const registerExport = (program: Command) => {
           process.exit(0)
         }
 
-        const format = formatOption as ExportFormat
-
-        await exportSnippet({
-          filePath: file,
-          format,
-          outputPath: options.output,
-          platformConfig,
-          pcbSnapshotSettings: options.showCourtyards
-            ? { showCourtyards: true }
-            : undefined,
-          onExit: (code) => process.exit(code),
-          onError: (message) => console.error(message),
-          onSuccess: ({ outputDestination }) =>
-            console.log(`Exported to ${outputDestination}!`),
-        })
+        // PATCH(homesodamachine): accept a comma-separated list of formats and
+        // export each one in a single invocation. Stock only exports one format
+        // per call; we generate the circuit JSON once, write it to a temp file,
+        // then run exportSnippet against that temp file for each requested
+        // format so the (expensive) eval only happens once.
+        const formats = formatOption.split(",").map((s) => s.trim())
+        if (formats.length === 1) {
+          await exportSnippet({
+            filePath: file,
+            format: formats[0] as ExportFormat,
+            outputPath: options.output,
+            platformConfig,
+            pcbSnapshotSettings: options.showCourtyards
+              ? { showCourtyards: true }
+              : undefined,
+            onExit: (code) => process.exit(code),
+            onError: (message) => console.error(message),
+            onSuccess: ({ outputDestination }) =>
+              console.log(`Exported to ${outputDestination}!`),
+          })
+        } else {
+          const cj = await generateCircuitJson({
+            filePath: file,
+            platformConfig,
+          })
+          if (!cj || !cj.circuitJson) {
+            console.error("Error generating circuit JSON")
+            process.exit(1)
+          }
+          const projectDir = path.dirname(file)
+          const baseName = path.basename(file, path.extname(file))
+          const tmpFile = path.join(
+            projectDir,
+            `._tsci-multifmt-${baseName}.circuit.json`,
+          )
+          await fs.writeFile(tmpFile, JSON.stringify(cj.circuitJson))
+          for (let k = 0; k < formats.length; k++) {
+            const fmt = formats[k] as ExportFormat
+            const ext = OUTPUT_EXTENSIONS[fmt] || ""
+            const out =
+              k === 0 && options.output
+                ? options.output
+                : path.join(projectDir, `${baseName}${ext}`)
+            await exportSnippet({
+              filePath: tmpFile,
+              format: fmt,
+              outputPath: out,
+              platformConfig,
+              pcbSnapshotSettings: options.showCourtyards
+                ? { showCourtyards: true }
+                : undefined,
+              onExit: (code) => {
+                if (code !== 0) process.exit(code)
+              },
+              onError: (message) => console.error(message),
+              onSuccess: ({ outputDestination }) =>
+                console.log(`Exported to ${outputDestination}!`),
+            })
+          }
+          fs.unlink(tmpFile).catch(() => {})
+          process.exit(0)
+        }
       },
     )
 }

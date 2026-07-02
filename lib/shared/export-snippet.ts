@@ -61,7 +61,7 @@ export const ALLOWED_EXPORT_FORMATS = [
 
 export type ExportFormat = (typeof ALLOWED_EXPORT_FORMATS)[number]
 
-const OUTPUT_EXTENSIONS: Record<ExportFormat, string> = {
+export const OUTPUT_EXTENSIONS: Record<ExportFormat, string> = {
   json: ".circuit.json",
   "circuit-json": ".circuit.json",
   "schematic-svg": "-schematic.svg",
